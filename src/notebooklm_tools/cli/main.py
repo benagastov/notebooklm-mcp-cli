@@ -166,6 +166,17 @@ def login_callback(
         "--from-env",
         help="Load auth from environment variables (NLM_EMAIL/NLM_PASSWORD or NLM_COOKIES)",
     ),
+    # Relay proxy authentication
+    relay: bool = typer.Option(
+        False,
+        "--relay",
+        help="Start a local proxy server — log in via your own browser, cookies are captured automatically",
+    ),
+    relay_port: int = typer.Option(
+        8989,
+        "--relay-port",
+        help="Port for the relay proxy server (default: 8989)",
+    ),
 ) -> None:
     """
     Authenticate with NotebookLM.
@@ -181,6 +192,10 @@ def login_callback(
     - nlm login --headless --email user@gmail.com --password secret
     - nlm login --from-env  (uses NLM_EMAIL/NLM_PASSWORD or NLM_COOKIES env vars)
     - Set NLM_PASSWORD env var to avoid passing password on command line
+
+    Relay proxy (log in from your own browser):
+    - nlm login --relay
+    - nlm login --relay --relay-port 9000
 
     To switch active accounts, run `nlm login switch <profile>`.
     """
@@ -260,6 +275,62 @@ def login_callback(
             console.print(f"[red]Error:[/red] {e.message}")
             if e.hint:
                 console.print(f"\n[dim]Hint: {e.hint}[/dim]")
+            raise typer.Exit(1) from e
+        return
+
+    # Relay proxy authentication mode
+    if relay:
+        try:
+            from notebooklm_tools.utils.cookie_relay_server import run_relay_server
+        except ImportError:
+            console.print("[red]Error:[/red] Flask is required for relay mode")
+            console.print("[dim]Install it with: pip install flask[/dim]")
+            raise typer.Exit(1)
+
+        console.print("[bold]Starting login relay server...[/bold]")
+        console.print(f"[dim]Open http://127.0.0.1:{relay_port} in your browser[/dim]\n")
+
+        try:
+            result = run_relay_server(
+                port=relay_port,
+                timeout=timeout,
+                open_browser=True,
+            )
+
+            cookies = result["cookies"]
+            csrf_token_val = result.get("csrf_token", "")
+            session_id_val = result.get("session_id", "")
+            email_val = result.get("email", "")
+            build_label_val = result.get("build_label", "")
+
+            auth.save_profile(
+                cookies=cookies,
+                csrf_token=csrf_token_val,
+                session_id=session_id_val,
+                email=email_val,
+                force=force,
+                build_label=build_label_val,
+            )
+
+            console.print("\n[green]✓[/green] Successfully authenticated!")
+            console.print(f"  Profile: {profile}")
+            console.print(f"  Provider: relay proxy")
+            console.print(f"  Cookies: {len(cookies)} extracted")
+            console.print(f"  CSRF Token: {'Yes' if csrf_token_val else 'No (will be auto-extracted)'}")
+            if email_val:
+                console.print(f"  Account: {email_val}")
+            console.print(f"  Credentials saved to: {auth.profile_dir}")
+
+        except TimeoutError as e:
+            console.print(f"[red]Error:[/red] {e}")
+            raise typer.Exit(1)
+        except AuthenticationError as e:
+            console.print(f"[red]Error:[/red] {e.message}")
+            if e.hint:
+                console.print(f"\n[dim]Hint: {e.hint}[/dim]")
+            raise typer.Exit(1) from e
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Relay authentication failed: {e}")
             raise typer.Exit(1) from e
         return
 
