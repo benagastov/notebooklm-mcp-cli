@@ -137,6 +137,35 @@ def login_callback(
         "--wsl",
         help="Launch Windows Chrome from WSL (fixes terminal corruption on WSL2)",
     ),
+    # Headless authentication options
+    headless: bool = typer.Option(
+        False,
+        "--headless",
+        help="Use headless browser authentication (for servers/CI)",
+    ),
+    email: str | None = typer.Option(
+        None,
+        "--email",
+        "-e",
+        help="Google account email for headless authentication",
+    ),
+    password: str | None = typer.Option(
+        None,
+        "--password",
+        "-w",
+        help="Google account password for headless authentication (or use NLM_PASSWORD env var)",
+    ),
+    timeout: int = typer.Option(
+        120,
+        "--timeout",
+        "-t",
+        help="Timeout for headless authentication in seconds",
+    ),
+    from_env: bool = typer.Option(
+        False,
+        "--from-env",
+        help="Load auth from environment variables (NLM_EMAIL/NLM_PASSWORD or NLM_COOKIES)",
+    ),
 ) -> None:
     """
     Authenticate with NotebookLM.
@@ -148,10 +177,15 @@ def login_callback(
     OpenClaw-managed browser CDP endpoint.
     Use --wsl on WSL2 to launch Windows Chrome and avoid terminal corruption.
 
+    Headless authentication (for servers/CI):
+    - nlm login --headless --email user@gmail.com --password secret
+    - nlm login --from-env  (uses NLM_EMAIL/NLM_PASSWORD or NLM_COOKIES env vars)
+    - Set NLM_PASSWORD env var to avoid passing password on command line
+
     To switch active accounts, run `nlm login switch <profile>`.
     """
     from notebooklm_tools.core.auth import AuthManager
-    from notebooklm_tools.core.exceptions import AccountMismatchError, NLMError
+    from notebooklm_tools.core.exceptions import AccountMismatchError, AuthenticationError, NLMError
     from notebooklm_tools.utils.config import get_config
 
     # If a subcommand is invoked, don't run login logic
@@ -226,6 +260,96 @@ def login_callback(
             console.print(f"[red]Error:[/red] {e.message}")
             if e.hint:
                 console.print(f"\n[dim]Hint: {e.hint}[/dim]")
+            raise typer.Exit(1) from e
+        return
+
+    # Headless authentication mode
+    if headless or from_env:
+        import os
+
+        from notebooklm_tools.utils.headless_auth import (
+            authenticate_with_credentials,
+            load_auth_from_environment,
+            validate_headless_auth_available,
+        )
+
+        # Check if headless auth is available
+        available, message = validate_headless_auth_available()
+        if not available:
+            console.print(f"[red]Error:[/red] Headless authentication is not available")
+            console.print(f"[dim]{message}[/dim]")
+            console.print("\n[dim]Install Playwright with:[/dim]")
+            console.print("  pip install playwright && playwright install chromium")
+            raise typer.Exit(1)
+
+        try:
+            # Load from environment if requested
+            if from_env:
+                console.print("[bold]Loading authentication from environment variables...[/bold]")
+                result = load_auth_from_environment(profile)
+                if not result:
+                    console.print("[red]Error:[/red] No authentication found in environment")
+                    console.print("[dim]Set one of:[/dim]")
+                    console.print("  - NLM_COOKIES: JSON-encoded cookie dict")
+                    console.print("  - NLM_COOKIE_FILE: Path to cookie file")
+                    console.print("  - NLM_EMAIL + NLM_PASSWORD: Google credentials")
+                    # Return early - don't go through exception handler
+                    return
+            else:
+                # Use provided credentials
+                if not email:
+                    email = typer.prompt("Enter Google account email")
+                if not password:
+                    password = os.environ.get("NLM_PASSWORD")
+                    if not password:
+                        import getpass
+
+                        password = getpass.getpass("Enter Google account password: ")
+
+                console.print("[bold]Starting headless authentication...[/bold]")
+                console.print(f"[dim]Using Playwright with headless Chromium[/dim]")
+                console.print(f"[dim]Email: {email}[/dim]\n")
+
+                result = authenticate_with_credentials(
+                    email=email,
+                    password=password,
+                    profile_name=profile,
+                    timeout=timeout,
+                )
+
+            # Extract results
+            cookies = result["cookies"]
+            csrf_token = result.get("csrf_token", "")
+            session_id = result.get("session_id", "")
+            extracted_email = result.get("email", email or "")
+            build_label = result.get("build_label", "")
+
+            # Save to profile
+            auth.save_profile(
+                cookies=cookies,
+                csrf_token=csrf_token,
+                session_id=session_id,
+                email=extracted_email,
+                force=force,
+                build_label=build_label,
+            )
+
+            console.print("\n[green]✓[/green] Successfully authenticated!")
+            console.print(f"  Profile: {profile}")
+            console.print(f"  Provider: headless (Playwright)")
+            console.print(f"  Cookies: {len(cookies)} extracted")
+            console.print(f"  CSRF Token: {'Yes' if csrf_token else 'No (will be auto-extracted)'}")
+            if extracted_email:
+                console.print(f"  Account: {extracted_email}")
+            console.print(f"  Credentials saved to: {auth.profile_dir}")
+
+        except AuthenticationError as e:
+            console.print(f"[red]Error:[/red] {e.message}")
+            if e.hint:
+                console.print(f"\n[dim]Hint: {e.hint}[/dim]")
+            raise typer.Exit(1) from e
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Headless authentication failed: {e}")
             raise typer.Exit(1) from e
         return
 

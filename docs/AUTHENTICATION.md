@@ -198,6 +198,64 @@ SID=abc123...; HSID=xyz789...; SSID=...; APISID=...; SAPISID=...; __Secure-1PSID
 
 ---
 
+## Method 3: Headless Mode (For Servers/CI)
+
+This method automates Google login using a headless browser, ideal for servers, CI/CD pipelines, or environments without a display.
+
+### Prerequisites
+
+```bash
+# Install with headless dependencies
+pip install notebooklm-mcp-cli[headless]
+
+# Install Playwright Chromium browser
+playwright install chromium
+```
+
+### Usage
+
+**Option A: Direct credentials**
+```bash
+nlm login --headless --email user@gmail.com --password "your-password"
+```
+
+**Option B: From environment variables (recommended for CI/CD)**
+```bash
+export NLM_EMAIL="user@gmail.com"
+export NLM_PASSWORD="your-password"
+nlm login --headless --from-env
+```
+
+**Option C: Pre-existing cookies**
+```bash
+# As JSON
+export NLM_COOKIES='{"SID": "...", "HSID": "...", "SSID": "..."}'
+nlm login --headless --from-env
+
+# Or from file
+export NLM_COOKIE_FILE="/path/to/cookies.txt"
+nlm login --headless --from-env
+```
+
+### Environment Variables for Headless Auth
+
+| Variable | Description |
+|----------|-------------|
+| `NLM_EMAIL` | Google account email |
+| `NLM_PASSWORD` | Google account password |
+| `NLM_COOKIES` | JSON-encoded cookie dictionary |
+| `NLM_COOKIE_FILE` | Path to cookie file |
+| `NLM_CSRF_TOKEN` | Optional CSRF token |
+| `NLM_SESSION_ID` | Optional session ID |
+
+### Important Notes
+
+- **2FA accounts**: Headless auth does NOT support 2FA. Use cookie file import instead.
+- **Google security**: Google may block automated logins (CAPTCHA). If blocked, use cookie file import.
+- **Password safety**: For production/CI, use environment variables or pre-existing cookies rather than passing passwords on command line.
+
+---
+
 ## Where Tokens Are Stored
 
 All data is stored under `~/.notebooklm-mcp-cli/`:
